@@ -1,16 +1,11 @@
 "use client";
 import React, { useState, useRef, useEffect } from 'react';
 import { Send, Bot, User, Plus, Menu, MessageSquare, ChevronLeft, ChevronRight, Edit2, Trash2, Check, X } from 'lucide-react';
+import SimpleSplitText from '../../components/SimpleSplitText';
 
 export default function ChatPage() {
-  const [messages, setMessages] = useState([
-    {
-      id: '1',
-      content: 'Hello! I\'m your Smart Referral System assistant. How can I help you with radiological examinations today?',
-      role: 'assistant',
-      timestamp: new Date()
-    }
-  ]);
+  const [showWelcome, setShowWelcome] = useState(true);
+  const [messages, setMessages] = useState([]);
   const [inputValue, setInputValue] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [chatSessions, setChatSessions] = useState([
@@ -33,60 +28,40 @@ export default function ChatPage() {
   const messagesContainerRef = useRef(null);
 
   const scrollToBottom = () => {
-    if (messagesContainerRef.current) {
-      messagesContainerRef.current.scrollTo({
-        top: messagesContainerRef.current.scrollHeight,
-        behavior: "smooth"
-      });
-    }
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   };
 
   const checkScrollPosition = () => {
-    const container = messagesContainerRef.current;
-    if (!container) return;
-    
-    const scrollTop = container.scrollTop;
-    const scrollHeight = container.scrollHeight;
-    const clientHeight = container.clientHeight;
-    const distanceFromBottom = scrollHeight - scrollTop - clientHeight;
-    
-    // Show button if more than 50px from bottom
-    const shouldShow = distanceFromBottom > 50;
-    setShowScrollButton(shouldShow);
+    if (messagesContainerRef.current) {
+      const { scrollTop, scrollHeight, clientHeight } = messagesContainerRef.current;
+      const isAtBottom = scrollHeight - scrollTop - clientHeight < 50;
+      setShowScrollButton(!isAtBottom);
+    }
   };
 
-  // Check scroll position when messages change
   useEffect(() => {
-    const timer = setTimeout(() => {
-      checkScrollPosition();
-    }, 100);
-    
-    return () => clearTimeout(timer);
+    scrollToBottom();
   }, [messages]);
 
-  // Setup scroll listeners
   useEffect(() => {
     const container = messagesContainerRef.current;
-    if (!container) return;
-    
-    const handleScroll = () => {
-      checkScrollPosition();
-    };
-    
-    // Add scroll listener
-    container.addEventListener('scroll', handleScroll, { passive: true });
-    
-    // Initial check
-    checkScrollPosition();
-    
-    return () => {
-      container.removeEventListener('scroll', handleScroll);
-    };
+    if (container) {
+      container.addEventListener('scroll', checkScrollPosition);
+      checkScrollPosition(); // Check initial position
+      
+      return () => {
+        container.removeEventListener('scroll', checkScrollPosition);
+      };
+    }
   }, []);
 
   const handleSendMessage = async () => {
     if (!inputValue.trim() || isLoading) return;
+
+    // Hide the welcome message when user sends first message
+    if (showWelcome) {
+      setShowWelcome(false);
+    }
 
     const userMessage = {
       id: Date.now().toString(),
@@ -327,40 +302,29 @@ export default function ChatPage() {
         </div>
 
         {/* Messages Area */}
-        <div className="flex-1 relative overflow-hidden">
-          {/* Scroll-to-bottom button */}
-          {showScrollButton && (
-            <div className="absolute bottom-20 left-1/2 transform -translate-x-1/2 z-50">
-              <button
-                onClick={scrollToBottom}
-                className="w-10 h-10 bg-white dark:bg-gray-800 border-2 border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700 rounded-full flex items-center justify-center shadow-lg transition-all duration-200 hover:scale-105"
-                title="Scroll to bottom"
-                aria-label="Scroll to bottom"
-              >
-                <svg
-                  width="20"
-                  height="20"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  xmlns="http://www.w3.org/2000/svg"
-                >
-                  <path
-                    d="M12 5v14m0 0l7-7m-7 7l-7-7"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    className="text-gray-700 dark:text-gray-300"
-                  />
-                </svg>
-              </button>
-            </div>
-          )}
-          
+        <div className="flex-1 relative">
           <div 
             ref={messagesContainerRef}
             className="h-full overflow-y-auto p-4 space-y-6"
           >
+          {/* Welcome Message with SplitText Animation */}
+          {showWelcome && (
+            <div className="flex items-center justify-center min-h-[200px]">
+              <SimpleSplitText
+                text="Hello, How Are You Today?"
+                className="text-4xl font-bold text-gray-800 dark:text-gray-200"
+                delay={50}
+                duration={0.8}
+                ease="power3.out"
+                splitType="chars"
+                from={{ opacity: 0, y: 40 }}
+                to={{ opacity: 1, y: 0 }}
+                textAlign="center"
+                tag="h2"
+              />
+            </div>
+          )}
+          
           {messages.map((message) => (
             <div
               key={message.id}
@@ -417,6 +381,35 @@ export default function ChatPage() {
         {/* Input Area */}
         <div className="bg-white dark:bg-gray-800 border-t border-gray-200 dark:border-gray-700 p-4">
           <div className="max-w-4xl mx-auto">
+            {/* Scroll-to-bottom button placed above the textarea (shows when not at bottom) */}
+            <div className="flex items-end justify-end mb-2">
+              {showScrollButton && (
+                <button
+                  onClick={scrollToBottom}
+                  className="w-10 h-10 bg-white border-2 border-black rounded-full flex items-center justify-center shadow transition hover:scale-105"
+                  title="Scroll to bottom"
+                >
+                  <svg
+                    width="20"
+                    height="20"
+                    viewBox="0 0 24 24"
+                    strokeWidth="2"
+                    fill="none"
+                    xmlns="http://www.w3.org/2000/svg"
+                    className="text-black"
+                  >
+                    <path
+                      d="M8.5 11L12 14.5L15.5 11"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                  </svg>
+                </button>
+              )}
+            </div>
+
             <div className="relative flex items-end gap-3 bg-gray-100 dark:bg-gray-700 rounded-2xl p-2">
               <textarea
                 ref={textareaRef}
