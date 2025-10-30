@@ -23,6 +23,24 @@ export default function ChatPage() {
   const [hoveredSessionId, setHoveredSessionId] = useState(null);
   const [showScrollButton, setShowScrollButton] = useState(false);
   
+  // Conversation flow state
+  const [conversationStep, setConversationStep] = useState(0);
+  const [userSelections, setUserSelections] = useState({
+    bodyArea: null,
+    panel: null,
+    ageGroup: null,
+    sex: null,
+    scenario: null
+  });
+  
+  // Dynamic options from database
+  const [availableOptions, setAvailableOptions] = useState({
+    bodyArea: [],
+    panel: [],
+    ageGroup: [],
+    sex: []
+  });
+  
   const messagesEndRef = useRef(null);
   const textareaRef = useRef(null);
   const messagesContainerRef = useRef(null);
@@ -55,6 +73,242 @@ export default function ChatPage() {
     }
   }, []);
 
+  // Start the conversation flow when chat begins
+  useEffect(() => {
+    if (messages.length === 0 && conversationStep === 0) {
+      startConversationFlow();
+    }
+  }, []);
+
+  // Fetch available options from database
+  const fetchOptions = async (type, filters = {}) => {
+    try {
+      const params = new URLSearchParams({
+        type,
+        filters: JSON.stringify(filters)
+      });
+      
+      console.log(`🌐 Fetching ${type} options...`);
+      const response = await fetch(`/api/chat?${params}`);
+      const data = await response.json();
+      
+      console.log(`📥 Response for ${type}:`, data);
+      
+      if (data.success) {
+        if (data.options.length === 0) {
+          console.warn(`⚠️ No ${type} options found in database!`);
+    alert(`⚠️ Warning: No ${type} options found in your database. Please check:\n\n1. MongoDB connection\n2. Database name\n3. Collection name ('imaging_recommendation')\n4. Documents have '${type}' field`);
+        }
+        return data.options;
+      } else {
+        console.error('Error fetching options:', data.error);
+        alert(`❌ Error fetching ${type}: ${data.error}`);
+        return [];
+      }
+    } catch (error) {
+      console.error('Error fetching options:', error);
+      alert(`❌ Network error fetching ${type}: ${error.message}\n\nPlease check:\n1. Is the dev server running?\n2. Is MongoDB connected?`);
+      return [];
+    }
+  };
+
+  const startConversationFlow = async () => {
+    // Fetch body area options from database
+    const bodyAreaOptions = await fetchOptions('bodyArea');
+    console.log('🔍 Fetched body area options:', bodyAreaOptions);
+    setAvailableOptions(prev => ({ ...prev, bodyArea: bodyAreaOptions }));
+    
+    const initialMessage = {
+      id: Date.now().toString(),
+      content: "Welcome! I'll guide you through finding the right radiological examination. Let's start:\n\n**Please select the Body Area:**",
+      role: 'assistant',
+      timestamp: new Date(),
+      options: bodyAreaOptions
+    };
+    console.log('📨 Initial message with options:', initialMessage);
+    setMessages([initialMessage]);
+    setConversationStep(1);
+    setShowWelcome(false);
+  };
+
+  const handleOptionSelect = async (option, step) => {
+    // Add user's selection as a message
+    const userMessage = {
+      id: Date.now().toString(),
+      content: option,
+      role: 'user',
+      timestamp: new Date()
+    };
+    setMessages(prev => [...prev, userMessage]);
+
+    // Update selections based on current step
+    let updatedSelections = { ...userSelections };
+    
+    switch(step) {
+      case 1: // Body Area
+        updatedSelections.bodyArea = option;
+        setUserSelections(updatedSelections);
+        
+        // Fetch panel options based on selected body area
+        const panelOptions = await fetchOptions('panel', { bodyArea: option });
+        setAvailableOptions(prev => ({ ...prev, panel: panelOptions }));
+        
+        setTimeout(() => {
+          const assistantMessage = {
+            id: (Date.now() + 1).toString(),
+            content: "Great! Now, **please select the Panel:**",
+            role: 'assistant',
+            timestamp: new Date(),
+            options: panelOptions
+          };
+          setMessages(prev => [...prev, assistantMessage]);
+          setConversationStep(2);
+        }, 500);
+        break;
+        
+      case 2: // Panel
+        updatedSelections.panel = option;
+        setUserSelections(updatedSelections);
+        
+        // Fetch age group options based on previous selections
+        const ageGroupOptions = await fetchOptions('ageGroup', { 
+          bodyArea: updatedSelections.bodyArea,
+          panel: option 
+        });
+        setAvailableOptions(prev => ({ ...prev, ageGroup: ageGroupOptions }));
+        
+        setTimeout(() => {
+          const assistantMessage = {
+            id: (Date.now() + 1).toString(),
+            content: "Perfect! Next, **please choose the Age group:**",
+            role: 'assistant',
+            timestamp: new Date(),
+            options: ageGroupOptions
+          };
+          setMessages(prev => [...prev, assistantMessage]);
+          setConversationStep(3);
+        }, 500);
+        break;
+        
+      case 3: // Age Group
+        updatedSelections.ageGroup = option;
+        setUserSelections(updatedSelections);
+        
+        // Fetch sex options based on all previous selections
+        const sexOptions = await fetchOptions('sex', { 
+          bodyArea: updatedSelections.bodyArea,
+          panel: updatedSelections.panel,
+          ageGroup: option
+        });
+        setAvailableOptions(prev => ({ ...prev, sex: sexOptions }));
+        
+        setTimeout(() => {
+          const assistantMessage = {
+            id: (Date.now() + 1).toString(),
+            content: "Excellent! Now, **please select the Sex:**",
+            role: 'assistant',
+            timestamp: new Date(),
+            options: sexOptions
+          };
+          setMessages(prev => [...prev, assistantMessage]);
+          setConversationStep(4);
+        }, 500);
+        break;
+        
+      case 4: // Sex
+        updatedSelections.sex = option;
+        setUserSelections(updatedSelections);
+        setTimeout(() => {
+          const assistantMessage = {
+            id: (Date.now() + 1).toString(),
+            content: "Almost there! **Please type the Scenario** you are looking for (e.g., 'chest pain', 'shortness of breath', etc.).\n\nI'll search the database for the most relevant cases.",
+            role: 'assistant',
+            timestamp: new Date()
+          };
+          setMessages(prev => [...prev, assistantMessage]);
+          setConversationStep(5);
+        }, 500);
+        break;
+    }
+  };
+
+  const handleScenarioSelect = async (scenarioId, scenarioDescription) => {
+    // Add user's selection message
+    const userMessage = {
+      id: Date.now().toString(),
+      content: `Selected: ${scenarioId}`,
+      role: 'user',
+      timestamp: new Date()
+    };
+    setMessages(prev => [...prev, userMessage]);
+    setIsLoading(true);
+
+    try {
+      const response = await fetch('/api/chat', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          scenarioId: scenarioId,
+          bodyArea: userSelections.bodyArea,
+          panel: userSelections.panel,
+          ageGroup: userSelections.ageGroup,
+          sex: userSelections.sex
+        }),
+      });
+
+      const data = await response.json();
+      
+      console.log('📦 Received data from API:', data);
+      console.log('📋 Procedures array:', data.procedures);
+      console.log('📊 Procedure count:', data.procedures?.length);
+      
+      let responseContent = '';
+      if (data.success && data.scenario) {
+        responseContent = `**Scenario ${data.scenario.scenario_id}: ${data.scenario.scenario_description}**\n\n`;
+        
+        // Fix: procedures are at data.procedures, not data.scenario.procedures
+        if (data.procedures && data.procedures.length > 0) {
+          responseContent += `**Appropriate Imaging Procedures (${data.procedures.length}):**\n\n`;
+          data.procedures.forEach((proc, index) => {
+            responseContent += `${index + 1}. **${proc.procedure_name}**\n`;
+            responseContent += `   • Color: ${proc.color_indicator || 'N/A'}\n`;
+            responseContent += `   • Adult RRL: ${proc.adult_rrl || 'N/A'}\n`;
+            responseContent += `   • Pediatric RRL: ${proc.peds_rrl || 'N/A'}\n`;
+            responseContent += `   • Appropriateness: ${proc.appropriateness_category}\n\n`;
+          });
+        } else {
+          responseContent += '\nNo procedures with appropriate ratings found for this scenario.';
+        }
+        
+        responseContent += '\n---\n\nWould you like to start a new search? Type "restart" or ask another question.';
+        setConversationStep(7); // Move to free conversation
+      } else {
+        responseContent = 'Sorry, I couldn\'t retrieve the procedure details for this scenario. Please try again or type "restart".';
+      }
+
+      const assistantMessage = {
+        id: (Date.now() + 1).toString(),
+        content: responseContent,
+        role: 'assistant',
+        timestamp: new Date()
+      };
+      setMessages(prev => [...prev, assistantMessage]);
+      setIsLoading(false);
+    } catch (error) {
+      console.error('Error fetching scenario details:', error);
+      const errorMessage = {
+        id: (Date.now() + 1).toString(),
+        content: 'Sorry, there was an error retrieving the scenario details. Please try again or type "restart".',
+        role: 'assistant',
+        timestamp: new Date()
+      };
+      setMessages(prev => [...prev, errorMessage]);
+      setIsLoading(false);
+    }
+  };
+
   const handleSendMessage = async () => {
     if (!inputValue.trim() || isLoading) return;
 
@@ -71,23 +325,103 @@ export default function ChatPage() {
     };
 
     setMessages(prev => [...prev, userMessage]);
+    const currentInput = inputValue.trim();
     setInputValue('');
     setIsLoading(true);
 
     // Auto scroll to bottom when sending message
     setTimeout(() => scrollToBottom(), 100);
 
-    // Simulate AI response
-    setTimeout(() => {
-      const assistantMessage = {
-        id: (Date.now() + 1).toString(),
-        content: generateResponse(userMessage.content),
-        role: 'assistant',
-        timestamp: new Date()
-      };
-      setMessages(prev => [...prev, assistantMessage]);
+    // If at step 5 (scenario search), query the database
+    if (conversationStep === 5) {
+      try {
+        const response = await fetch('/api/chat', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            scenario: currentInput,
+            bodyArea: userSelections.bodyArea,
+            panel: userSelections.panel,
+            ageGroup: userSelections.ageGroup,
+            sex: userSelections.sex
+          }),
+        });
+
+        const data = await response.json();
+        
+        let responseContent = '';
+        if (data.success && data.results.length > 0) {
+          responseContent = `I found **${data.count} matching scenario(s)** for "${currentInput}":\n\n`;
+          responseContent += `Please select a scenario number to view appropriate imaging procedures:\n\n`;
+          
+          const assistantMessage = {
+            id: (Date.now() + 1).toString(),
+            content: responseContent,
+            role: 'assistant',
+            timestamp: new Date(),
+            scenarioOptions: data.results // Store scenarios for button rendering
+          };
+          setMessages(prev => [...prev, assistantMessage]);
+          setConversationStep(6); // Move to scenario selection step
+        } else {
+          responseContent = `I couldn't find any matching scenarios for "${currentInput}" with the selected criteria.\n\nWould you like to:\n1. Try a different keyword\n2. Restart the search with different parameters (type "restart")`;
+          
+          const assistantMessage = {
+            id: (Date.now() + 1).toString(),
+            content: responseContent,
+            role: 'assistant',
+            timestamp: new Date()
+          };
+          setMessages(prev => [...prev, assistantMessage]);
+          setConversationStep(7); // Move to free conversation
+        }
+        setIsLoading(false);
+      } catch (error) {
+        console.error('Error querying database:', error);
+        const errorMessage = {
+          id: (Date.now() + 1).toString(),
+          content: 'Sorry, there was an error searching the database. Please try again or type "restart" to begin a new search.',
+          role: 'assistant',
+          timestamp: new Date()
+        };
+        setMessages(prev => [...prev, errorMessage]);
+        setIsLoading(false);
+      }
+    } else if (conversationStep === 6) {
+      // Step 6: User selected a scenario, fetch detailed procedures
       setIsLoading(false);
-    }, 1000 + Math.random() * 2000);
+    } else if (conversationStep === 7) {
+      // Free conversation after initial flow
+      if (currentInput.toLowerCase().includes('restart')) {
+        setConversationStep(0);
+        setUserSelections({
+          bodyArea: null,
+          panel: null,
+          ageGroup: null,
+          sex: null,
+          scenario: null
+        });
+        startConversationFlow();
+        setIsLoading(false);
+      } else {
+        // Regular AI response
+        setTimeout(() => {
+          const assistantMessage = {
+            id: (Date.now() + 1).toString(),
+            content: generateResponse(currentInput),
+            role: 'assistant',
+            timestamp: new Date()
+          };
+          setMessages(prev => [...prev, assistantMessage]);
+          setIsLoading(false);
+        }, 1000 + Math.random() * 2000);
+      }
+    } else {
+      // Should not reach here if flow is working correctly
+      setIsLoading(false);
+    }
   };
 
   const generateResponse = (userInput) => {
@@ -123,17 +457,23 @@ export default function ChatPage() {
     const newSession = {
       id: Date.now().toString(),
       title: 'New Chat',
-      messages: [{
-        id: Date.now().toString(),
-        content: 'Hello! I\'m your Smart Referral System assistant. How can I help you with radiological examinations today?',
-        role: 'assistant',
-        timestamp: new Date()
-      }],
+      messages: [],
       lastActive: new Date()
     };
     setChatSessions(prev => [newSession, ...prev]);
     setCurrentSessionId(newSession.id);
-    setMessages(newSession.messages);
+    setMessages([]);
+    setConversationStep(0);
+    setUserSelections({
+      bodyArea: null,
+      panel: null,
+      ageGroup: null,
+      sex: null,
+      scenario: null
+    });
+    setShowWelcome(true);
+    // Start the flow automatically
+    setTimeout(() => startConversationFlow(), 300);
   };
 
   const deleteChat = (sessionId) => {
@@ -336,16 +676,77 @@ export default function ChatPage() {
                 </div>
               )}
               
-              <div
-                className={`max-w-3xl px-4 py-3 rounded-2xl ${
-                  message.role === 'user'
-                    ? 'bg-black text-white'
-                    : 'bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700'
-                }`}
-              >
-                <p className="text-sm leading-6 whitespace-pre-wrap">
-                  {message.content}
-                </p>
+              <div className="flex flex-col gap-2 max-w-3xl">
+                <div
+                  className={`px-4 py-3 rounded-2xl ${
+                    message.role === 'user'
+                      ? 'bg-black text-white'
+                      : 'bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700'
+                  }`}
+                >
+                  <p className="text-sm leading-6 whitespace-pre-wrap">
+                    {message.content}
+                  </p>
+                </div>
+                
+                {/* Display scenario buttons if message has scenarioOptions */}
+                {message.scenarioOptions && message.scenarioOptions.length > 0 && (
+                  <div className="flex flex-col gap-2 mt-2">
+                    {message.scenarioOptions.map((scenario) => (
+                      <button
+                        key={scenario.scenario_id}
+                        onClick={() => handleScenarioSelect(scenario.scenario_id, scenario.scenario_description)}
+                        className="px-4 py-3 bg-white dark:bg-gray-700 border-2 border-blue-500 dark:border-blue-400 text-gray-900 dark:text-white rounded-lg hover:bg-blue-50 dark:hover:bg-gray-600 transition-all text-left font-medium shadow-sm"
+                        disabled={isLoading}
+                      >
+                        <span className="font-bold text-blue-600 dark:text-blue-400">{scenario.scenario_id}:</span> {scenario.scenario_description}
+                      </button>
+                    ))}
+                  </div>
+                )}
+                
+                {/* Display dropdown select if message has options */}
+                {message.options && message.options.length > 0 && (
+                  <div className="w-full mt-3">
+                    <div className="relative inline-block w-full max-w-md">
+                      <select
+                        onChange={(e) => {
+                          if (e.target.value) {
+                            console.log('Selected:', e.target.value);
+                            handleOptionSelect(e.target.value, conversationStep);
+                            setTimeout(() => {
+                              e.target.value = '';
+                            }, 100);
+                          }
+                        }}
+                        className="w-full px-4 py-3 pr-10 bg-white dark:bg-gray-700 border-2 border-black dark:border-gray-400 text-gray-900 dark:text-white rounded-lg focus:outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-600 cursor-pointer text-base font-medium appearance-none shadow-md hover:bg-gray-50 dark:hover:bg-gray-600 transition-all"
+                        style={{ minHeight: '48px' }}
+                        defaultValue=""
+                      >
+                        <option value="" disabled className="text-gray-500">
+                          👉 Click here to select
+                        </option>
+                        {message.options.map((option, index) => (
+                          <option key={index} value={option} className="py-3 text-gray-900 dark:text-white">
+                            {option}
+                          </option>
+                        ))}
+                      </select>
+                      {/* Custom Arrow Icon */}
+                      <div className="absolute right-3 top-1/2 transform -translate-y-1/2 pointer-events-none">
+                        <svg 
+                          className="w-6 h-6 text-black dark:text-gray-300" 
+                          fill="none" 
+                          stroke="currentColor" 
+                          viewBox="0 0 24 24"
+                          strokeWidth="3"
+                        >
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+                        </svg>
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
 
               {message.role === 'user' && (
