@@ -33,6 +33,10 @@ export default function ChatPage() {
     scenario: null
   });
   
+  // Checkpoint state to track history
+  const [checkpoints, setCheckpoints] = useState([]);
+  const [showCheckpointMenu, setShowCheckpointMenu] = useState(false);
+  
   // Dynamic options from database
   const [availableOptions, setAvailableOptions] = useState({
     bodyArea: [],
@@ -79,6 +83,20 @@ export default function ChatPage() {
       startConversationFlow();
     }
   }, []);
+
+  // Close checkpoint menu when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event) => {
+      if (showCheckpointMenu && !event.target.closest('.checkpoint-menu-container')) {
+        setShowCheckpointMenu(false);
+      }
+    };
+
+    if (showCheckpointMenu) {
+      document.addEventListener('mousedown', handleClickOutside);
+      return () => document.removeEventListener('mousedown', handleClickOutside);
+    }
+  }, [showCheckpointMenu]);
 
   // Fetch available options from database
   const fetchOptions = async (type, filters = {}) => {
@@ -129,9 +147,58 @@ export default function ChatPage() {
     setMessages([initialMessage]);
     setConversationStep(1);
     setShowWelcome(false);
+    setCheckpoints([]); // Clear checkpoints on new flow
+  };
+
+  const saveCheckpoint = () => {
+    const checkpoint = {
+      id: Date.now(),
+      step: conversationStep,
+      stepName: getStepName(conversationStep),
+      selections: { ...userSelections },
+      messages: [...messages],
+      options: { ...availableOptions },
+      timestamp: new Date()
+    };
+    setCheckpoints(prev => [...prev, checkpoint]);
+  };
+
+  const getStepName = (step) => {
+    switch(step) {
+      case 0: return 'Start';
+      case 1: return 'Body Area Selection';
+      case 2: return 'Panel Selection';
+      case 3: return 'Age Group Selection';
+      case 4: return 'Sex Selection';
+      case 5: return 'Scenario Input';
+      case 6: return 'Scenario Selection';
+      case 7: return 'Free Conversation';
+      default: return `Step ${step}`;
+    }
+  };
+
+  const restoreCheckpoint = (checkpointId) => {
+    const checkpoint = checkpoints.find(cp => cp.id === checkpointId);
+    if (!checkpoint) {
+      alert('Checkpoint not found!');
+      return;
+    }
+    
+    setConversationStep(checkpoint.step);
+    setUserSelections(checkpoint.selections);
+    setMessages(checkpoint.messages);
+    setAvailableOptions(checkpoint.options);
+    
+    // Remove all checkpoints after the restored one
+    const checkpointIndex = checkpoints.findIndex(cp => cp.id === checkpointId);
+    setCheckpoints(prev => prev.slice(0, checkpointIndex));
+    setShowCheckpointMenu(false);
   };
 
   const handleOptionSelect = async (option, step) => {
+    // Save checkpoint before making changes
+    saveCheckpoint();
+    
     // Add user's selection as a message
     const userMessage = {
       id: Date.now().toString(),
@@ -233,6 +300,9 @@ export default function ChatPage() {
   };
 
   const handleScenarioSelect = async (scenarioId, scenarioDescription) => {
+    // Save checkpoint before selecting scenario
+    saveCheckpoint();
+    
     // Add user's selection message
     const userMessage = {
       id: Date.now().toString(),
@@ -311,6 +381,11 @@ export default function ChatPage() {
 
   const handleSendMessage = async () => {
     if (!inputValue.trim() || isLoading) return;
+
+    // Save checkpoint before processing user input (for step 5 onwards)
+    if (conversationStep >= 5) {
+      saveCheckpoint();
+    }
 
     // Hide the welcome message when user sends first message
     if (showWelcome) {
@@ -405,6 +480,17 @@ export default function ChatPage() {
         });
         startConversationFlow();
         setIsLoading(false);
+      } else if (currentInput === '1') {
+        // User wants to try a different keyword - go back to step 5
+        const assistantMessage = {
+          id: (Date.now() + 1).toString(),
+          content: "Almost there! **Please type the Scenario** you are looking for (e.g., 'chest pain', 'shortness of breath', etc.).\n\nI'll search the database for the most relevant cases.",
+          role: 'assistant',
+          timestamp: new Date()
+        };
+        setMessages(prev => [...prev, assistantMessage]);
+        setConversationStep(5); // Go back to scenario input step
+        setIsLoading(false);
       } else {
         // Regular AI response
         setTimeout(() => {
@@ -472,6 +558,7 @@ export default function ChatPage() {
       scenario: null
     });
     setShowWelcome(true);
+    setCheckpoints([]); // Clear checkpoints
     // Start the flow automatically
     setTimeout(() => startConversationFlow(), 300);
   };
@@ -665,7 +752,15 @@ export default function ChatPage() {
             </div>
           )}
           
-          {messages.map((message) => (
+          {messages.map((message, messageIndex) => {
+            // Check if this message's options are still active (it's the last assistant message with options)
+            const isLastAssistantWithOptions = message.role === 'assistant' && message.options && 
+              messageIndex === messages.map((m, i) => m.role === 'assistant' && m.options ? i : -1).filter(i => i !== -1).pop();
+            
+            const isLastAssistantWithScenarios = message.role === 'assistant' && message.scenarioOptions && 
+              messageIndex === messages.map((m, i) => m.role === 'assistant' && m.scenarioOptions ? i : -1).filter(i => i !== -1).pop();
+            
+            return (
             <div
               key={message.id}
               className={`flex gap-4 ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
@@ -695,16 +790,25 @@ export default function ChatPage() {
                     {message.scenarioOptions.map((scenario) => (
                       <button
                         key={scenario.scenario_id}
-                        onClick={() => handleScenarioSelect(scenario.scenario_id, scenario.scenario_description)}
-                        className="px-4 py-3 bg-white dark:bg-gray-700 border-2 border-blue-500 dark:border-blue-400 text-gray-900 dark:text-white rounded-lg hover:bg-blue-50 dark:hover:bg-gray-600 transition-all text-left font-medium shadow-sm"
-                        disabled={isLoading}
+                        onClick={() => {
+                          if (!isLastAssistantWithScenarios) {
+                            alert('⚠️ This question has already been answered.\n\nUse "Restore Checkpoint" to go back and change your answer.');
+                            return;
+                          }
+                          handleScenarioSelect(scenario.scenario_id, scenario.scenario_description);
+                        }}
+                        className={`px-4 py-3 rounded-lg text-left font-medium shadow-sm transition-all ${
+                          isLastAssistantWithScenarios
+                            ? 'bg-white dark:bg-gray-700 border-2 border-blue-500 dark:border-blue-400 text-gray-900 dark:text-white hover:bg-blue-50 dark:hover:bg-gray-600 cursor-pointer'
+                            : 'bg-gray-200 dark:bg-gray-600 border-2 border-gray-400 dark:border-gray-500 text-gray-500 dark:text-gray-400 cursor-not-allowed opacity-60'
+                        }`}
+                        disabled={isLoading || !isLastAssistantWithScenarios}
                       >
-                        <span className="font-bold text-blue-600 dark:text-blue-400">{scenario.scenario_id}:</span> {scenario.scenario_description}
+                        <span className={`font-bold ${isLastAssistantWithScenarios ? 'text-blue-600 dark:text-blue-400' : 'text-gray-500'}`}>{scenario.scenario_id}:</span> {scenario.scenario_description}
                       </button>
                     ))}
                   </div>
                 )}
-                
                 {/* Display dropdown select if message has options */}
                 {message.options && message.options.length > 0 && (
                   <div className="w-full mt-3">
@@ -712,6 +816,11 @@ export default function ChatPage() {
                       <select
                         onChange={(e) => {
                           if (e.target.value) {
+                            if (!isLastAssistantWithOptions) {
+                              alert('⚠️ This question has already been answered.\n\nUse "Restore Checkpoint" to go back and change your answer.');
+                              e.target.value = '';
+                              return;
+                            }
                             console.log('Selected:', e.target.value);
                             handleOptionSelect(e.target.value, conversationStep);
                             setTimeout(() => {
@@ -719,12 +828,17 @@ export default function ChatPage() {
                             }, 100);
                           }
                         }}
-                        className="w-full px-4 py-3 pr-10 bg-white dark:bg-gray-700 border-2 border-black dark:border-gray-400 text-gray-900 dark:text-white rounded-lg focus:outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-600 cursor-pointer text-base font-medium appearance-none shadow-md hover:bg-gray-50 dark:hover:bg-gray-600 transition-all"
+                        disabled={!isLastAssistantWithOptions}
+                        className={`w-full px-4 py-3 pr-10 border-2 rounded-lg focus:outline-none text-base font-medium appearance-none shadow-md transition-all ${
+                          isLastAssistantWithOptions
+                            ? 'bg-white dark:bg-gray-700 border-black dark:border-gray-400 text-gray-900 dark:text-white focus:border-blue-600 focus:ring-2 focus:ring-blue-600 cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-600'
+                            : 'bg-gray-200 dark:bg-gray-600 border-gray-400 dark:border-gray-500 text-gray-500 dark:text-gray-400 cursor-not-allowed opacity-60'
+                        }`}
                         style={{ minHeight: '48px' }}
                         defaultValue=""
                       >
                         <option value="" disabled className="text-gray-500">
-                          👉 Click here to select
+                          {isLastAssistantWithOptions ? '👉 Click here to select' : '🔒 Already answered'}
                         </option>
                         {message.options.map((option, index) => (
                           <option key={index} value={option} className="py-3 text-gray-900 dark:text-white">
@@ -735,7 +849,7 @@ export default function ChatPage() {
                       {/* Custom Arrow Icon */}
                       <div className="absolute right-3 top-1/2 transform -translate-y-1/2 pointer-events-none">
                         <svg 
-                          className="w-6 h-6 text-black dark:text-gray-300" 
+                          className={`w-6 h-6 ${isLastAssistantWithOptions ? 'text-black dark:text-gray-300' : 'text-gray-400'}`}
                           fill="none" 
                           stroke="currentColor" 
                           viewBox="0 0 24 24"
@@ -755,7 +869,8 @@ export default function ChatPage() {
                 </div>
               )}
             </div>
-          ))}
+          );
+          })}
 
           {isLoading && (
             <div className="flex gap-4 justify-start">
@@ -782,6 +897,66 @@ export default function ChatPage() {
         {/* Input Area */}
         <div className="bg-white dark:bg-gray-800 border-t border-gray-200 dark:border-gray-700 p-4">
           <div className="max-w-4xl mx-auto">
+            {/* Restore Checkpoint Button - Shows when checkpoints exist */}
+            {checkpoints.length > 0 && (
+              <div className="relative mb-3 checkpoint-menu-container">
+                <div className="flex items-center justify-center">
+                  <button
+                    onClick={() => setShowCheckpointMenu(!showCheckpointMenu)}
+                    className="flex items-center gap-2 px-4 py-2 bg-amber-500 hover:bg-amber-600 text-white rounded-lg font-medium shadow-md transition-all"
+                    title="View and restore checkpoints"
+                  >
+                    <ChevronLeft size={18} />
+                    Restore Checkpoint ({checkpoints.length})
+                  </button>
+                </div>
+                
+                {/* Checkpoint Menu Dropdown */}
+                {showCheckpointMenu && (
+                  <div className="absolute bottom-full left-1/2 transform -translate-x-1/2 mb-2 w-96 bg-white dark:bg-gray-800 border-2 border-amber-500 rounded-lg shadow-xl z-50 max-h-96 overflow-y-auto">
+                    <div className="p-3 bg-amber-500 text-white font-semibold border-b-2 border-amber-600">
+                      Select Checkpoint to Restore
+                    </div>
+                    <div className="p-2">
+                      {checkpoints.map((checkpoint, index) => (
+                        <button
+                          key={checkpoint.id}
+                          onClick={() => restoreCheckpoint(checkpoint.id)}
+                          className="w-full text-left px-4 py-3 mb-2 bg-gray-50 dark:bg-gray-700 hover:bg-amber-50 dark:hover:bg-gray-600 border border-gray-200 dark:border-gray-600 rounded-lg transition-all"
+                        >
+                          <div className="flex items-start justify-between">
+                            <div className="flex-1">
+                              <div className="font-semibold text-gray-900 dark:text-white">
+                                {index + 1}. {checkpoint.stepName}
+                              </div>
+                              <div className="text-sm text-gray-600 dark:text-gray-400 mt-1">
+                                {checkpoint.selections.bodyArea && (
+                                  <span className="mr-2">📍 {checkpoint.selections.bodyArea}</span>
+                                )}
+                                {checkpoint.selections.panel && (
+                                  <span className="mr-2">📋 {checkpoint.selections.panel}</span>
+                                )}
+                                {checkpoint.selections.ageGroup && (
+                                  <span className="mr-2">👤 {checkpoint.selections.ageGroup}</span>
+                                )}
+                                {checkpoint.selections.sex && (
+                                  <span className="mr-2">⚧ {checkpoint.selections.sex}</span>
+                                )}
+                              </div>
+                              <div className="text-xs text-gray-500 dark:text-gray-500 mt-1">
+                                {new Date(checkpoint.timestamp).toLocaleTimeString()}
+                              </div>
+                            </div>
+                            <ChevronLeft size={16} className="text-amber-500 mt-1" />
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+            
             {/* Scroll-to-bottom button placed above the textarea (shows when not at bottom) */}
             <div className="flex items-end justify-end mb-2">
               {showScrollButton && (
